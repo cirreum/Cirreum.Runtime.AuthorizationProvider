@@ -1,0 +1,18 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+	<PropertyGroup>
+		<RootNamespace>Cirreum.Runtime</RootNamespace>
+		<Description>The Cirreum Authorization Provider for the Cirreum Runtime Server.</Description>
+		<PackageTags>cirreum;runtime;server;authorization</PackageTags>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<FrameworkReference Include="Microsoft.AspNetCore.App" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<PackageReference Include="Cirreum.Logging.Deferred" Version="1.0.102" />
+		<PackageReference Include="Cirreum.AuthorizationProvider" Version="1.0.1" />
+	</ItemGroup>
+
+</Project>

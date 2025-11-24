@@ -12,7 +12,7 @@
 
 	<ItemGroup>
 		<PackageReference Include="Cirreum.Logging.Deferred" Version="1.0.102" />
-		<PackageReference Include="Cirreum.AuthorizationProvider" Version="1.0.1" />
+		<PackageReference Include="Cirreum.AuthorizationProvider" Version="1.0.4" />
 	</ItemGroup>
 
 </Project>

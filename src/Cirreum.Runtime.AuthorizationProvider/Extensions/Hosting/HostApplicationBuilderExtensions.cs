@@ -68,9 +68,9 @@ public static class HostApplicationBuilderExtensions {
 
 			// Register the Provider
 			registrar.Register(
-				builder.Services,
 				providerSettings,
-				providerSection,
+				builder.Services,
+				builder.Configuration,
 				authenticationBuilder);
 
 			deferredLogger.LogDebug(

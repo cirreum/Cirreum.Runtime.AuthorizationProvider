@@ -17,13 +17,15 @@ public static class HostApplicationBuilderExtensions {
 	/// <typeparam name="TInstanceSettings">The type of the provider instance settings.</typeparam>
 	/// <param name="builder">The host application builder.</param>
 	/// <param name="authenticationBuilder">The authentication builder.</param>
+	/// <param name="required">If true, throws an exception when configuration is missing. Default is false.</param>
 	/// <returns>The host application builder for chaining.</returns>
 	/// <exception cref="InvalidOperationException">
 	/// Thrown when the configuration section exists but cannot be bound to <typeparamref name="TSettings"/>.
 	/// </exception>
 	public static IHostApplicationBuilder RegisterAuthorizationProvider<TRegistrar, TSettings, TInstanceSettings>(
 		this IHostApplicationBuilder builder,
-		AuthenticationBuilder authenticationBuilder)
+		AuthenticationBuilder authenticationBuilder,
+		bool required = false)
 		where TRegistrar : AuthorizationProviderRegistrar<TSettings, TInstanceSettings>, new()
 		where TSettings : AuthorizationProviderSettings<TInstanceSettings>
 		where TInstanceSettings : AuthorizationProviderInstanceSettings {
@@ -47,11 +49,16 @@ public static class HostApplicationBuilderExtensions {
 			var registrar = new TRegistrar();
 			var providerSectionKey = GetProviderConfigPath(registrar.ProviderType, registrar.ProviderName);
 			var providerSection = builder.Configuration.GetSection(providerSectionKey);
-
 			if (!providerSection.Exists()) {
-				deferredLogger.LogWarning(
-					"No configuration settings found for {RegistrarName}.",
-					registrarName);
+				if (required) {
+					throw new InvalidOperationException(
+						$"Configuration required but not found for '{registrarName}' at '{providerSectionKey}'.");
+				}
+
+				deferredLogger.LogDebug(
+					"Skipping '{registrarName}' - no configuration found at '{configPath}'.",
+					registrarName,
+					providerSectionKey);
 				return builder;
 			}
 

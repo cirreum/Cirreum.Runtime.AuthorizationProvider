@@ -6,11 +6,13 @@
 [![License](https://img.shields.io/github/license/cirreum/Cirreum.Runtime.AuthorizationProvider?style=flat-square&labelColor=1F1F1F&color=F2F2F2)](https://github.com/cirreum/Cirreum.Runtime.AuthorizationProvider/blob/main/LICENSE)
 [![.NET](https://img.shields.io/badge/.NET-10.0-003D8F?style=flat-square&labelColor=1F1F1F)](https://dotnet.microsoft.com/)
 
-**Authorization provider extensions for the Cirreum Runtime Server**
+**Base registration infrastructure for Cirreum authorization providers**
 
 ## Overview
 
-**Cirreum.Runtime.AuthorizationProvider** provides extension methods for registering authorization providers with ASP.NET Core applications in the Cirreum Runtime Server ecosystem. It streamlines the configuration and registration of authorization providers through a type-safe, configuration-driven approach.
+**Cirreum.Runtime.AuthorizationProvider** provides the extension methods for registering authorization providers with ASP.NET Core applications. This is the **runtime layer** that defines the provider registration pattern and typically not referenced directly.
+
+> **Note:** For the complete authorization system with all provider implementations (Entra ID, API Key, Signed Request, External/BYOID), see [Cirreum.Runtime.Authorization](https://github.com/cirreum/Cirreum.Runtime.Authorization). Most applications should reference that package instead of this one directly.
 
 ## Features
 
@@ -87,10 +89,6 @@ public class MyAuthRegistrar : AuthorizationProviderRegistrar<MyAuthSettings, My
     }
 }
 ```
-
-## Documentation
-
-- **[Authorization Design](AUTHORIZATION.md)** - Comprehensive guide to OAuth2 scopes, app roles, and Microsoft Entra ID integration patterns
 
 ## Contribution Guidelines
 

@@ -4,25 +4,37 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is **Cirreum.Runtime.AuthorizationProvider**, a .NET 10 library that provides authorization provider functionality for the Cirreum Runtime Server. It's part of the Cirreum Foundation Framework ecosystem and provides extension methods for registering authorization providers with ASP.NET Core applications.
+This is **Cirreum.Runtime.AuthorizationProvider**, a .NET 10 library that provides authorization provider registration and role enrichment for the Cirreum Runtime Server. It's part of the Cirreum Foundation Framework ecosystem.
 
 ## Architecture
 
 ### Core Components
 
-- **HostApplicationBuilderExtensions**: The main entry point (`src/Cirreum.Runtime.AuthorizationProvider/Extensions/Hosting/HostApplicationBuilderExtensions.cs:24`) that provides the `RegisterAuthorizationProvider<TRegistrar, TSettings, TInstanceSettings>()` method
-- **Authorization Provider Integration**: Integrates with the Cirreum.AuthorizationProvider package for provider registration and configuration
-- **Deferred Logging**: Uses Cirreum.Logging.Deferred for structured logging during provider registration
+- **HostApplicationBuilderExtensions** (`Extensions/Hosting/`) — `RegisterAuthorizationProvider<TRegistrar, TSettings, TInstanceSettings>()` extension method for provider registration
+- **AudienceProviderRoleClaimsTransformer** — `IClaimsTransformation` implementation that resolves application roles via `IRoleResolver` and adds them as `ClaimTypes.Role` claims. Internal.
+- **ClaimsTransformResult** — Public diagnostic record stashed in `HttpContext.Items` after each transformation pass. Key: `ClaimsTransformResult.ItemsKey`.
+- **AuthorizationProviderDiagnostics** — Internal `ActivitySource` and `Meter` using BCL `System.Diagnostics`. OTel subscription is handled by `Cirreum.Runtime.Authorization`.
+- **RoleEnrichmentServiceCollectionExtensions** — `AddRoleEnrichment()` extension called by `CirreumAuthorizationBuilder.AddRoleResolver<T>()`.
 
 ### Project Structure
 
 ```
 src/Cirreum.Runtime.AuthorizationProvider/
-├── Extensions/Hosting/
-│   └── HostApplicationBuilderExtensions.cs     # Main registration logic
-├── Cirreum.Runtime.AuthorizationProvider.csproj
-└── AUTHORIZATION.md                            # Authorization design documentation
+├── Extensions/
+│   ├── Hosting/
+│   │   └── HostApplicationBuilderExtensions.cs     # Provider registration
+│   └── ServiceCollectionExtensions.cs              # AddRoleEnrichment()
+├── AudienceProviderRoleClaimsTransformer.cs        # IClaimsTransformation (internal)
+├── AuthorizationProviderDiagnostics.cs             # ActivitySource + Meter (internal)
+├── ClaimsTransformResult.cs                        # Diagnostic record (public)
+└── Cirreum.Runtime.AuthorizationProvider.csproj
 ```
+
+### Layer Responsibilities
+
+- **Cirreum.AuthorizationProvider** (Core) — Contracts: `IRoleResolver`, `AuthorizationDiagnostics.DiagnosticName` const, base registrar classes
+- **Cirreum.Runtime.AuthorizationProvider** (Runtime) — Implementation: transformer, diagnostics, registration extension
+- **Cirreum.Runtime.Authorization** (Runtime Extensions) — Composition: `AddRoleResolver<T>()` calls `AddRoleEnrichment()` + subscribes OTel
 
 ### Configuration Pattern
 
@@ -33,26 +45,17 @@ The library uses a hierarchical configuration pattern:
 
 ## Development Commands
 
-### Build
 ```bash
 dotnet build
-```
-
-### Package
-```bash
 dotnet pack
-```
-
-### Clean
-```bash
 dotnet clean
 ```
 
 ## Key Dependencies
 
 - **Microsoft.AspNetCore.App**: Framework reference for ASP.NET Core integration
-- **Cirreum.Logging.Deferred** (v1.0.102): Structured logging with deferred execution
-- **Cirreum.AuthorizationProvider** (v1.0.1): Core authorization provider abstractions
+- **Cirreum.Logging.Deferred**: Structured logging with deferred execution
+- **Cirreum.AuthorizationProvider**: Core authorization provider abstractions (IRoleResolver, base registrars)
 
 ## Build Configuration
 
@@ -61,28 +64,5 @@ dotnet clean
 - **Nullable**: Enabled
 - **Implicit Usings**: Enabled
 - **Documentation**: XML documentation file generation enabled
-
-### MSBuild Properties
-
-The project uses a sophisticated build system with:
-- **CI/CD Detection**: Automatically detects Azure DevOps, GitHub Actions, and general CI environments
-- **Versioning**: Local builds default to 1.0.100-rc, CI builds use different versioning
-- **Build Props**: Modular build configuration through separate .props files in `/build/`
-
-## Authorization Design
-
-See `AUTHORIZATION.md` for detailed authorization architecture including:
-- OAuth2 scopes vs app roles distinction
-- Delegated vs application permissions patterns
-- Microsoft Entra ID/External ID integration patterns
-- JWT token validation and role-based authorization
-
-## Development Guidelines
-
-Based on the project's contribution guidelines:
-
-1. **Be conservative with new abstractions** - API surface must remain stable
-2. **Limit dependency expansion** - Only add foundational, version-stable dependencies  
-3. **Favor additive, non-breaking changes** - Breaking changes affect the entire ecosystem
-4. **Include thorough unit tests** - All primitives should be independently testable
-5. **Follow .NET conventions** - Use established patterns from Microsoft.Extensions.* libraries
+- **Local Release Version**: 1.0.100-rc
+- **VersionSuffix**: Uses `-rc` prefix (not `rc`) for valid SemVer

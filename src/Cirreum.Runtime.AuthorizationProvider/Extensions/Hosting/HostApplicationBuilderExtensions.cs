@@ -9,6 +9,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
 public static class HostApplicationBuilderExtensions {
+
 	/// <summary>
 	/// Register Authorization Provider.
 	/// </summary>
@@ -93,4 +94,5 @@ public static class HostApplicationBuilderExtensions {
 	// Helper method for building provider configuration paths
 	private static string GetProviderConfigPath(ProviderType providerType, string providerName) =>
 		$"Cirreum:{providerType}:Providers:{providerName}";
+
 }

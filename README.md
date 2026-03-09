@@ -10,7 +10,7 @@
 
 ## Overview
 
-**Cirreum.Runtime.AuthorizationProvider** provides the extension methods for registering authorization providers with ASP.NET Core applications. This is the **runtime layer** that defines the provider registration pattern and typically not referenced directly.
+**Cirreum.Runtime.AuthorizationProvider** provides the runtime layer for registering authorization providers with ASP.NET Core applications. It includes the provider registration pattern, role enrichment via claims transformation, and diagnostics. This package is typically not referenced directly.
 
 > **Note:** For the complete authorization system with all provider implementations (Entra ID, API Key, Signed Request, External/BYOID), see [Cirreum.Runtime.Authorization](https://github.com/cirreum/Cirreum.Runtime.Authorization). Most applications should reference that package instead of this one directly.
 
@@ -19,6 +19,8 @@
 - **Type-safe provider registration** with generic constraints
 - **Configuration-driven setup** using hierarchical configuration sections
 - **Multiple provider instances** support per registrar type
+- **Role enrichment** via `IRoleResolver` — resolves application roles from your data store and adds them as `ClaimTypes.Role` claims
+- **Diagnostics** — `ActivitySource`, `Meter`, and per-request `ClaimsTransformResult` stashed in `HttpContext.Items` for debugging
 - **Duplicate registration protection** with automatic detection
 - **Structured logging** with deferred execution for performance
 - **Seamless ASP.NET Core integration** through `IHostApplicationBuilder` extensions
@@ -31,37 +33,36 @@ dotnet add package Cirreum.Runtime.AuthorizationProvider
 
 ## Usage
 
-### Basic Registration
+### Provider Registration
+
+Authorization providers are registered during application startup. Each provider type has its own registrar that reads from the hierarchical configuration:
 
 ```csharp
-using Microsoft.Extensions.Hosting;
-
-var builder = Host.CreateApplicationBuilder(args);
+var builder = DomainApplication.CreateBuilder(args);
 var authBuilder = builder.Services.AddAuthentication();
 
-// Register your authorization provider
-builder.RegisterAuthorizationProvider<MyAuthRegistrar, MyAuthSettings, MyInstanceSettings>(authBuilder);
-
-var app = builder.Build();
+// Register an authorization provider (typically called by the Runtime)
+builder.RegisterAuthorizationProvider<EntraAuthorizationRegistrar, EntraAuthorizationSettings, EntraAuthorizationInstanceSettings>(authBuilder);
 ```
 
 ### Configuration Structure
 
-Configure your authorization providers in `appsettings.json`:
+Configure your authorization providers in `appsettings.json`. Instances are keyed by name:
 
 ```json
 {
   "Cirreum": {
     "Authorization": {
       "Providers": {
-        "MyProvider": {
-          "Instances": [
-            {
-              "Name": "Primary",
-              "Endpoint": "https://auth.example.com",
+        "Entra": {
+          "Instances": {
+            "Primary": {
+              "Enabled": true,
+              "Audience": "api://my-app",
+              "TenantId": "your-tenant-id",
               "ClientId": "your-client-id"
             }
-          ]
+          }
         }
       }
     }
@@ -69,26 +70,44 @@ Configure your authorization providers in `appsettings.json`:
 }
 ```
 
-### Custom Authorization Provider
+### Role Enrichment
 
-Implement your authorization provider by inheriting from the base classes:
+For audience-based providers (Entra, Okta, OIDC), you can resolve application roles from your data store and add them as claims. Register your `IRoleResolver` implementation via `CirreumAuthorizationBuilder`:
 
 ```csharp
-public class MyAuthRegistrar : AuthorizationProviderRegistrar<MyAuthSettings, MyInstanceSettings>
-{
-    public override ProviderType ProviderType => ProviderType.Authorization;
-    public override string ProviderName => "MyProvider";
-    
-    public override void Register(
-        IServiceCollection services, 
-        MyAuthSettings settings, 
-        IConfigurationSection section,
-        AuthenticationBuilder authBuilder)
-    {
-        // Your registration logic here
+builder.AddAuthorization(auth => auth
+    .AddRoleResolver<MyRoleResolver>()
+);
+```
+
+The resolver is called once per request during claims transformation. Requests that already carry role claims (e.g., workforce tokens) are skipped automatically.
+
+```csharp
+public class MyRoleResolver : IRoleResolver {
+    public async Task<IReadOnlyList<string>?> ResolveRolesAsync(
+        string externalUserId,
+        CancellationToken cancellationToken = default) {
+        // Load roles from your database
+        return await db.GetRolesForUserAsync(externalUserId, cancellationToken);
     }
 }
 ```
+
+### Diagnostics
+
+The claims transformer stashes a `ClaimsTransformResult` in `HttpContext.Items` after every transformation pass. Useful for debugging authorization issues in middleware or diagnostic endpoints:
+
+```csharp
+if (httpContext.Items[ClaimsTransformResult.ItemsKey] is ClaimsTransformResult result) {
+    // result.Outcome:       "RolesResolved", "AlreadyTransformed", "NoUserIdentifier", etc.
+    // result.ResolverType:  "MyRoleResolver"
+    // result.UserId:        The external user ID from the token
+    // result.RoleClaimType: The claim type used for roles
+    // result.RoleCount:     Number of roles added
+}
+```
+
+Telemetry is produced via `System.Diagnostics` using the diagnostic name `Cirreum.AuthorizationProvider`. The OTel subscription is handled automatically by `CirreumAuthorizationBuilder.AddRoleResolver<T>()`.
 
 ## Contribution Guidelines
 

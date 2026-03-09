@@ -1,0 +1,205 @@
+namespace Cirreum.AuthorizationProvider;
+
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Logging;
+using System.Security.Claims;
+
+/// <summary>
+/// ASP.NET <see cref="IClaimsTransformation"/> that enriches a principal authenticated
+/// via an Audience-based authorization provider by resolving application roles and
+/// adding them as <see cref="ClaimTypes.Role"/> claims.
+/// </summary>
+/// <remarks>
+/// Executes during <c>UseAuthentication()</c>, before <c>UseAuthorization()</c>
+/// evaluates endpoint policies. If the authenticated principal already contains
+/// role claims, no resolution occurs.
+///
+/// Role resolution is cached for the duration of the request using
+/// <see cref="HttpContext.Items"/> to ensure the resolver is invoked at most once.
+/// </remarks>
+internal sealed partial class AudienceProviderRoleClaimsTransformer(
+	IRoleResolver resolver,
+	IHttpContextAccessor httpContextAccessor,
+	ILogger<AudienceProviderRoleClaimsTransformer> logger
+) : IClaimsTransformation {
+
+	private const string TransformedKey = "__Cirreum_AudienceProviderRoleClaimsTransformer";
+	private const string RolesName = "roles";
+	private const string RoleName = "role";
+	private const string Oid = "oid";
+	private const string Sub = "sub";
+	private const string UserId = "user_id";
+
+	static class WellKnownClaimTypes {
+		/// <summary>Entra / Azure AD object identifier URI claim.</summary>
+		public const string ObjectId = "http://schemas.microsoft.com/identity/claims/objectidentifier";
+	}
+
+	/// <summary>
+	/// Transforms the specified ClaimsPrincipal by resolving and adding role claims based on the user's identity.
+	/// </summary>
+	/// <remarks>This method checks if the ClaimsPrincipal has already been transformed to prevent duplicate
+	/// transformations. It also handles various scenarios where the user identity may not be valid or roles cannot be
+	/// resolved.</remarks>
+	/// <param name="principal">The ClaimsPrincipal representing the user and their claims to be transformed. Cannot be null.</param>
+	/// <returns>A ClaimsPrincipal that includes the resolved role claims if any were found; otherwise, returns the original
+	/// principal.</returns>
+	public async Task<ClaimsPrincipal> TransformAsync(ClaimsPrincipal principal) {
+		var context = httpContextAccessor.HttpContext;
+		if (context is null) {
+			Log.NoHttpContext(logger);
+			return principal;
+		}
+
+		using var activity = AuthorizationProviderDiagnostics.ActivitySource.StartActivity("ClaimsTransformation");
+		activity?.SetTag("auth.transformer.name", "AudienceProviderRoleClaimsTransformer");
+
+		if (context.Items.ContainsKey(TransformedKey)) {
+			AuthorizationProviderDiagnostics.TransformCounter.Add(1, new KeyValuePair<string, object?>("outcome", "already_transformed"));
+			activity?.SetTag("auth.transform.outcome", "AlreadyTransformed");
+			Log.AlreadyTransformed(logger);
+			return Return(principal, context, "AlreadyTransformed");
+		}
+
+		// Mark immediately — prevents re-entry if ASP.NET calls TransformAsync again
+		// on the same request before the async work completes.
+		context.Items[TransformedKey] = true;
+
+		var resolverType = resolver.GetType().Name;
+
+		if (principal.Identity is not ClaimsIdentity identity) {
+			AuthorizationProviderDiagnostics.TransformCounter.Add(1, new KeyValuePair<string, object?>("outcome", "no_claims_identity"));
+			activity?.SetTag("auth.transform.outcome", "NoClaimsIdentity");
+			Log.NoClaimsIdentity(logger);
+			return Return(principal, context, "NoClaimsIdentity", resolverType);
+		}
+
+		// Skip: workforce or internally-assigned user already has roles in the token.
+		var roleClaimType = identity.RoleClaimType;
+		activity?.SetTag("auth.role_claim_type", roleClaimType);
+		if (ContainsRoles(identity, roleClaimType)) {
+			AuthorizationProviderDiagnostics.TransformCounter.Add(1, new KeyValuePair<string, object?>("outcome", "role_already_present"));
+			activity?.SetTag("auth.transform.outcome", "RolesAlreadyPresent");
+			Log.RolesAlreadyPresent(logger, roleClaimType);
+			return Return(principal, context, "RolesAlreadyPresent", resolverType, roleClaimType: roleClaimType);
+		}
+
+		// Find the external ID claim (try several common claim types). If not present, we
+		// can't resolve roles, so return the original principal.
+		var userId = FindUserId(principal);
+		if (userId is null) {
+			AuthorizationProviderDiagnostics.TransformCounter.Add(1, new KeyValuePair<string, object?>("outcome", "no_user_id"));
+			activity?.SetTag("auth.transform.outcome", "NoUserIdentifier");
+			Log.NoUserIdentifier(logger);
+			return Return(principal, context, "NoUserIdentifier", resolverType, roleClaimType: roleClaimType);
+		}
+		activity?.SetTag("external.user.id", userId);
+
+		// Resolve roles and add them as claims. If resolution fails or returns no roles, return
+		try {
+
+			var roles = await resolver.ResolveRolesAsync(userId);
+			if (roles is null or { Count: 0 }) {
+				AuthorizationProviderDiagnostics.TransformCounter.Add(1, new KeyValuePair<string, object?>("outcome", "no_roles_resolved"));
+				Log.NoRolesResolved(logger, userId);
+				activity?.SetTag("auth.transform.outcome", "NoRolesResolved");
+				return Return(principal, context, "NoRolesResolved", resolverType, userId, roleClaimType);
+			}
+
+			// Add resolved roles as claims using the identity's RoleClaimType (usually ClaimTypes.Role).
+			activity?.SetTag("auth.roles.count", roles.Count);
+			AuthorizationProviderDiagnostics.TransformCounter.Add(1, new KeyValuePair<string, object?>("outcome", "roles_resolved"));
+			foreach (var role in roles) {
+				identity.AddClaim(new Claim(roleClaimType, role));
+			}
+
+			if (logger.IsEnabled(LogLevel.Debug)) {
+				var roleString = string.Join(", ", roles);
+				Log.RolesResolvedDetail(logger, roleString, userId);
+			}
+
+			activity?.SetTag("auth.transform.outcome", "RolesResolved");
+			Log.RolesResolved(logger, roles.Count, userId, roleClaimType);
+			return Return(principal, context, "RolesResolved", resolverType, userId, roleClaimType, roles.Count);
+
+		} catch (Exception e) {
+			AuthorizationProviderDiagnostics.TransformCounter.Add(1, new KeyValuePair<string, object?>("outcome", "role_resolution_failed"));
+			Log.RoleResolutionFailed(logger, e, userId);
+			activity?.SetTag("auth.transform.outcome", "RoleResolutionFailed");
+			return Return(principal, context, "RoleResolutionFailed", resolverType, userId, roleClaimType);
+		}
+
+	}
+
+	private static bool ContainsRoles(ClaimsIdentity identity, string roleType) {
+
+		foreach (var c in identity.Claims) {
+			var t = c.Type;
+
+			if (string.Equals(t, roleType, StringComparison.OrdinalIgnoreCase) ||
+				string.Equals(t, RolesName, StringComparison.OrdinalIgnoreCase) ||
+				string.Equals(t, RoleName, StringComparison.OrdinalIgnoreCase)) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	private static string? FindUserId(ClaimsPrincipal principal) {
+		foreach (var c in principal.Claims) {
+			var t = c.Type;
+			if (string.Equals(t, Oid, StringComparison.OrdinalIgnoreCase) ||
+				string.Equals(t, Sub, StringComparison.OrdinalIgnoreCase) ||
+				string.Equals(t, UserId, StringComparison.OrdinalIgnoreCase) ||
+				string.Equals(t, WellKnownClaimTypes.ObjectId, StringComparison.Ordinal)) {
+				return c.Value;
+			}
+		}
+		return null;
+	}
+
+	private static ClaimsPrincipal Return(
+		ClaimsPrincipal principal,
+		HttpContext context,
+		string outcome,
+		string? resolverType = null,
+		string? userId = null,
+		string? roleClaimType = null,
+		int? roleCount = null) {
+		context.Items[ClaimsTransformResult.ItemsKey] = new ClaimsTransformResult(outcome, resolverType, userId, roleClaimType, roleCount);
+		return principal;
+	}
+
+	private static partial class Log {
+
+		[LoggerMessage(EventId = 1000, Level = LogLevel.Trace, Message = "Claims transformation skipped because HttpContext was not available.")]
+		public static partial void NoHttpContext(ILogger logger);
+
+		[LoggerMessage(EventId = 1001, Level = LogLevel.Trace, Message = "Claims transformation skipped because the request was already transformed.")]
+		public static partial void AlreadyTransformed(ILogger logger);
+
+		[LoggerMessage(EventId = 1002, Level = LogLevel.Debug, Message = "Claims transformation skipped because the principal identity was not a ClaimsIdentity.")]
+		public static partial void NoClaimsIdentity(ILogger logger);
+
+		[LoggerMessage(EventId = 1003, Level = LogLevel.Debug, Message = "Claims transformation skipped because role claims already exist. RoleClaimType: {RoleClaimType}")]
+		public static partial void RolesAlreadyPresent(ILogger logger, string roleClaimType);
+
+		[LoggerMessage(EventId = 1004, Level = LogLevel.Debug, Message = "Claims transformation skipped because no supported user identifier claim was found.")]
+		public static partial void NoUserIdentifier(ILogger logger);
+
+		[LoggerMessage(EventId = 1005, Level = LogLevel.Warning, Message = "Role resolution failed for user identifier '{UserId}'.")]
+		public static partial void RoleResolutionFailed(ILogger logger, Exception exception, string userId);
+
+		[LoggerMessage(EventId = 1006, Level = LogLevel.Debug, Message = "No roles were resolved for user identifier '{UserId}'.")]
+		public static partial void NoRolesResolved(ILogger logger, string userId);
+
+		[LoggerMessage(EventId = 1007, Level = LogLevel.Information, Message = "Resolved {RoleCount} roles for user identifier '{UserId}' using role claim type '{RoleClaimType}'.")]
+		public static partial void RolesResolved(ILogger logger, int roleCount, string userId, string roleClaimType);
+
+		[LoggerMessage(EventId = 1008, Level = LogLevel.Debug, Message = "Resolved roles [{Roles}] for user identifier '{UserId}'.")]
+		public static partial void RolesResolvedDetail(ILogger logger, string roles, string userId);
+	}
+
+}

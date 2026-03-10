@@ -2,7 +2,6 @@ namespace Cirreum.AuthorizationProvider;
 
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.DependencyInjection.Extensions;
 
 /// <summary>
 /// Extension methods for registering role enrichment services.
@@ -17,7 +16,7 @@ public static class RoleEnrichmentServiceCollectionExtensions {
 	/// <returns>The service collection for chaining.</returns>
 	public static IServiceCollection AddRoleEnrichment(this IServiceCollection services) {
 		services.AddHttpContextAccessor();
-		services.TryAddScoped<IClaimsTransformation, AudienceProviderRoleClaimsTransformer>();
+		services.AddScoped<IClaimsTransformation, AudienceProviderRoleClaimsTransformer>();
 		return services;
 	}
 

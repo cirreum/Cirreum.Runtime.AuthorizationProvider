@@ -7,7 +7,7 @@ namespace Cirreum.AuthorizationProvider;
 /// during debugging or in diagnostic middleware.
 /// </summary>
 /// <param name="Outcome">The transformation outcome (e.g. <c>RolesResolved</c>, <c>AlreadyTransformed</c>, <c>NoUserIdentifier</c>).</param>
-/// <param name="ResolverType">The concrete <see cref="Cirreum.AuthorizationProvider.IRoleResolver"/> type name, if resolution was attempted.</param>
+/// <param name="ResolverType">The concrete <see cref="IRoleResolver"/> type name, if resolution was attempted.</param>
 /// <param name="UserId">The external user identifier extracted from the token, if found.</param>
 /// <param name="RoleClaimType">The claim type used for role claims (typically <c>http://schemas.microsoft.com/ws/2008/06/identity/claims/role</c>).</param>
 /// <param name="RoleCount">The number of roles resolved and added, if any.</param>

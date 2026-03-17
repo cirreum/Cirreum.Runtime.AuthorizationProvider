@@ -2,6 +2,7 @@ namespace Cirreum.AuthorizationProvider;
 
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using System.Security.Claims;
 
@@ -11,15 +12,18 @@ using System.Security.Claims;
 /// adding them as <see cref="ClaimTypes.Role"/> claims.
 /// </summary>
 /// <remarks>
-/// Executes during <c>UseAuthentication()</c>, before <c>UseAuthorization()</c>
-/// evaluates endpoint policies. If the authenticated principal already contains
-/// role claims, no resolution occurs.
+/// Invoked by ASP.NET's <see cref="IClaimsTransformation"/> pipeline after the
+/// authentication handler produces a principal and before authorization policies
+/// are evaluated. If the principal already contains role claims, no resolution occurs.
 ///
-/// Role resolution is cached for the duration of the request using
-/// <see cref="HttpContext.Items"/> to ensure the resolver is invoked at most once.
+/// Role resolution is delegated to an <see cref="IRoleResolver"/> registered in DI.
+/// Cirreum applications typically register this indirectly via
+/// <c>CirreumAuthorizationBuilder.AddApplicationUserResolver&lt;T&gt;()</c>, which
+/// provides an adapter that bridges <c>IApplicationUserResolver</c> to
+/// <see cref="IRoleResolver"/>.
 /// </remarks>
 internal sealed partial class AudienceProviderRoleClaimsTransformer(
-	IRoleResolver resolver,
+	IServiceProvider serviceProvider,
 	IHttpContextAccessor httpContextAccessor,
 	ILogger<AudienceProviderRoleClaimsTransformer> logger
 ) : IClaimsTransformation {
@@ -37,12 +41,13 @@ internal sealed partial class AudienceProviderRoleClaimsTransformer(
 	}
 
 	/// <summary>
-	/// Transforms the specified ClaimsPrincipal by resolving and adding role claims based on the user's identity.
+	/// Transforms the specified ClaimsPrincipal by resolving application roles and adding
+	/// them as role claims based on the user's identity.
 	/// </summary>
 	/// <remarks>This method checks if the ClaimsPrincipal has already been transformed to prevent duplicate
 	/// transformations. It also handles various scenarios where the user identity may not be valid or roles cannot be
 	/// resolved.</remarks>
-	/// <param name="principal">The ClaimsPrincipal representing the user and their claims to be transformed. Cannot be null.</param>
+	/// <param name="principal">The ClaimsPrincipal representing the user and their claims to be transformed.</param>
 	/// <returns>A ClaimsPrincipal that includes the resolved role claims if any were found; otherwise, returns the original
 	/// principal.</returns>
 	public async Task<ClaimsPrincipal> TransformAsync(ClaimsPrincipal principal) {
@@ -66,7 +71,15 @@ internal sealed partial class AudienceProviderRoleClaimsTransformer(
 		// on the same request before the async work completes.
 		context.Items[TransformedKey] = true;
 
-		var resolverType = resolver.GetType().Name;
+		var resolver = serviceProvider.GetService<IRoleResolver>();
+		var resolverType = resolver?.GetType().Name;
+
+		if (resolver is null) {
+			AuthorizationProviderDiagnostics.TransformCounter.Add(1, new KeyValuePair<string, object?>("outcome", "no_resolver"));
+			activity?.SetTag("auth.transform.outcome", "NoResolver");
+			Log.NoResolver(logger);
+			return Return(principal, context, "NoResolver");
+		}
 
 		if (principal.Identity is not ClaimsIdentity identity) {
 			AuthorizationProviderDiagnostics.TransformCounter.Add(1, new KeyValuePair<string, object?>("outcome", "no_claims_identity"));
@@ -96,10 +109,11 @@ internal sealed partial class AudienceProviderRoleClaimsTransformer(
 		}
 		activity?.SetTag("external.user.id", userId);
 
-		// Resolve roles and add them as claims. If resolution fails or returns no roles, return
+		// Resolve roles and add them as claims.
 		try {
 
-			var roles = await resolver.ResolveRolesAsync(userId);
+			var roles = await resolver.ResolveRolesAsync(userId, context.RequestAborted);
+
 			if (roles is null or { Count: 0 }) {
 				AuthorizationProviderDiagnostics.TransformCounter.Add(1, new KeyValuePair<string, object?>("outcome", "no_roles_resolved"));
 				Log.NoRolesResolved(logger, userId);
@@ -200,6 +214,9 @@ internal sealed partial class AudienceProviderRoleClaimsTransformer(
 
 		[LoggerMessage(EventId = 1008, Level = LogLevel.Debug, Message = "Resolved roles [{Roles}] for user identifier '{UserId}'.")]
 		public static partial void RolesResolvedDetail(ILogger logger, string roles, string userId);
+
+		[LoggerMessage(EventId = 1009, Level = LogLevel.Debug, Message = "Claims transformation skipped because no IRoleResolver is registered.")]
+		public static partial void NoResolver(ILogger logger);
 	}
 
 }

@@ -88,6 +88,13 @@ internal sealed partial class AudienceProviderRoleClaimsTransformer(
 			return Return(principal, context, "NoClaimsIdentity", resolverType);
 		}
 
+		// Defensive: stamp the canonical scheme key for routes wired to an explicit scheme
+		// that bypass the dynamic ForwardDefaultSelector (which is the primary writer).
+		// TryAdd preserves the forward-selector's value when both run.
+		// Key literal must match Cirreum.Security.AuthenticationContextKeys.AuthenticatedScheme
+		// in Cirreum.Core — this package doesn't reference Cirreum.Core, so we duplicate the const.
+		context.Items.TryAdd("__Cirreum_AuthenticatedScheme", identity.AuthenticationType);
+
 		// Skip: workforce or internally-assigned user already has roles in the token.
 		var roleClaimType = identity.RoleClaimType;
 		activity?.SetTag("auth.role_claim_type", roleClaimType);
